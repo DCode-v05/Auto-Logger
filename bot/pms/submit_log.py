@@ -47,6 +47,13 @@ _CSRF_IN_HTML = re.compile(
 _INPUT_NAME = re.compile(
     r'<(?:input|select|textarea)[^>]*\bname=["\']([^"\']+)["\']', re.IGNORECASE
 )
+# Scope input-name parsing to the actual DailyLogForm — there are other forms
+# on the page (navbar search posts to /me/bigboss/) whose inputs would
+# otherwise be picked up and cause confusion.
+_DAILY_LOG_FORM_BLOCK = re.compile(
+    r'<form[^>]*\bid=["\']DailyLogForm["\'][^>]*>(.*?)</form>',
+    re.IGNORECASE | re.DOTALL,
+)
 _ERROR_BLOCK = re.compile(
     r'<(?:li|div|span|p)[^>]*class=["\'][^"\']*'
     r'(?:errorlist|invalid-feedback|alert-danger|text-danger)[^"\']*["\'][^>]*>(.*?)</'
@@ -54,15 +61,6 @@ _ERROR_BLOCK = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _TAG_STRIP = re.compile(r"<[^>]+>")
-
-
-def _guess_field(names: list[str], *want: str) -> str | None:
-    """Return the first name that contains any of the 'want' substrings."""
-    for n in names:
-        low = n.lower()
-        if any(w in low for w in want):
-            return n
-    return None
 
 
 async def submit_log(
@@ -99,54 +97,49 @@ async def submit_log(
             raise ReLoginRequired("session expired (redirected to login)")
 
         html = await page.content()
-        if "csrfmiddlewaretoken" not in html:
-            # Maybe we hit a profile-completion gate or a different page.
+
+        # Scope parsing to the DailyLogForm block so we don't pick up the
+        # navbar search input (name="detail") or other unrelated forms.
+        form_block_match = _DAILY_LOG_FORM_BLOCK.search(html)
+        if not form_block_match:
             log.error(
-                "daily_log GET succeeded but no CSRF token on page url=%s\nbody head:\n%s",
+                "daily_log GET succeeded but DailyLogForm not found on page url=%s\nbody head:\n%s",
                 page.url, html[:2000],
             )
             raise SubmitError(
-                f"Loaded {page.url} but it has no CSRF token; the site may require "
-                "profile completion first, or the URL is not a form page."
+                f"Loaded {page.url} but the daily-log form was not on the page; "
+                "the site may require profile completion first."
             )
+        form_html = form_block_match.group(1)
 
-        csrf_match = _CSRF_IN_HTML.search(html)
+        csrf_match = _CSRF_IN_HTML.search(form_html)
         if not csrf_match:
-            raise SubmitError("csrfmiddlewaretoken not found in form HTML")
+            raise SubmitError("csrfmiddlewaretoken not found inside DailyLogForm")
         csrf = csrf_match.group(1)
 
-        # Parse all form input names to align with what the server actually expects.
-        found_names = list({m.group(1) for m in _INPUT_NAME.finditer(html)})
-        log.info("daily_log form fields on server: %s", sorted(found_names))
+        found_names = sorted({m.group(1) for m in _INPUT_NAME.finditer(form_html)})
+        log.info("daily_log form fields on server: %s", found_names)
 
-        field_activities = _guess_field(found_names, "activit") or "activities_done"
-        field_time = _guess_field(found_names, "time", "hour") or "time_spent"
-        field_location = _guess_field(found_names, "location", "place") or "location"
-        field_location_other = (
-            _guess_field(found_names, "specify", "other_location", "location_other")
-            or "location_other"
-        )
-        field_description = _guess_field(found_names, "descrip") or "description"
-        field_reference = _guess_field(found_names, "refer", "link") or "reference_link"
-        field_attachment = _guess_field(found_names, "attach", "file") or "attachment"
-
-        # 2. Build the multipart payload.
+        # Hardcoded field names matching the production HTML
+        # (iqube.therig.in DailyLogForm, verified 2026-04):
+        #   activities_done, time_spent, location, custom_location,
+        #   reference_link, attachment, description
         fields: dict[str, object] = {
             "csrfmiddlewaretoken": csrf,
-            field_activities: payload.activities,
-            field_time: str(payload.time_spent),
-            field_location: payload.location,
-            field_description: payload.description,
+            "activities_done": payload.activities,
+            "time_spent": str(payload.time_spent),
+            "location": payload.location,  # "iQube" / "Home/Hostel" / "Other"
+            "description": payload.description,
         }
         if payload.location == S.LOCATION_OTHER and payload.location_other:
-            fields[field_location_other] = payload.location_other
+            fields["custom_location"] = payload.location_other
         if payload.reference_link:
-            fields[field_reference] = payload.reference_link
+            fields["reference_link"] = payload.reference_link
 
         if payload.attachment_path is not None:
             att = payload.attachment_path
             mime, _ = mimetypes.guess_type(str(att))
-            fields[field_attachment] = {
+            fields["attachment"] = {
                 "name": att.name,
                 "mimeType": mime or "application/octet-stream",
                 "buffer": att.read_bytes(),

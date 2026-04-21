@@ -22,9 +22,9 @@ def optionals_keyboard(include_ref: bool, include_attach: bool) -> InlineKeyboar
 def location_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(S.LOCATION_IQUBE, callback_data=f"loc:{S.LOCATION_IQUBE}")],
-            [InlineKeyboardButton(S.LOCATION_HOME, callback_data=f"loc:{S.LOCATION_HOME}")],
-            [InlineKeyboardButton(S.LOCATION_OTHER, callback_data=f"loc:{S.LOCATION_OTHER}")],
+            [InlineKeyboardButton("iQube", callback_data=f"loc:{S.LOCATION_IQUBE}")],
+            [InlineKeyboardButton("Home/Hostel", callback_data=f"loc:{S.LOCATION_HOME}")],
+            [InlineKeyboardButton("Other (Specify)", callback_data=f"loc:{S.LOCATION_OTHER}")],
             [InlineKeyboardButton("Cancel", callback_data="loc:cancel")],
         ]
     )

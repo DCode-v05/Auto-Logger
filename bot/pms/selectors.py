@@ -91,7 +91,8 @@ PMS_DAILY_LOG_CREATE_PATH = '/me/daily_log/create/'
 PMS_DAILY_LOG_LIST_PATH = '/me/daily_log/'
 PMS_ME_PATH = '/me/'
 
-# Values for Location dropdown (as they appear in the <select>)
+# Values for Location dropdown — these are the actual <option value="..."> strings
+# from the DailyLogForm on iqube.therig.in.
 LOCATION_IQUBE = 'iQube'
 LOCATION_HOME = 'Home/Hostel'
-LOCATION_OTHER = 'Other (Specify)'
+LOCATION_OTHER = 'Other'  # display label elsewhere is "Other (Specify)"
