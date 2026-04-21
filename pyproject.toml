@@ -2,7 +2,7 @@
 name = "pms-telegram-bot"
 version = "0.1.0"
 description = "Telegram bot that submits iQube PMS daily logs on behalf of college users by replaying their Microsoft OAuth login in a per-user Playwright browser."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "python-telegram-bot[webhooks]>=21.6",
     "playwright>=1.48",
