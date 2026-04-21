@@ -51,12 +51,13 @@
       btn.disabled = true;
       btn.textContent = 'Submitting…';
       const data = new FormData(form);
-      data.append('initData', tg?.initData || '');
+      data.append('init_data', tg?.initData || '');
       try {
         const res = await fetch('/webapp/mfa', { method: 'POST', body: data });
         if (!res.ok) {
-          const detail = (await res.json().catch(() => ({}))).detail || res.statusText;
-          throw new Error(detail);
+          let detail = (await res.json().catch(() => ({}))).detail;
+          if (Array.isArray(detail)) detail = detail.map(e => (e.loc || []).join('.') + ': ' + e.msg).join('; ');
+          throw new Error(detail || res.statusText);
         }
         if (tg) tg.close();
       } catch (e) {

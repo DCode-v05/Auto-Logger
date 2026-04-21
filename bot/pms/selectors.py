@@ -4,8 +4,19 @@ If the site changes its HTML, the fix goes here — nowhere else.
 All selectors are verified by `tests/test_selectors.py` against a real login fixture.
 """
 
-# iQube login page
-IQUBE_MS_LOGIN_BUTTON = 'a[href*="azuread-oauth2"]'
+# iQube login page — first matching selector wins
+IQUBE_MS_LOGIN_BUTTON_CANDIDATES = [
+    'a[href*="azuread-oauth2"]',
+    'a[href*="/login/azuread"]',
+    'a[href*="/login/microsoft"]',
+    'a[href*="microsoft"]',
+    'a[href*="azure"]',
+    'button:has-text("Microsoft")',
+    'a:has-text("Microsoft")',
+    'a:has-text("Sign in with Microsoft")',
+]
+# Kept for back-compat
+IQUBE_MS_LOGIN_BUTTON = IQUBE_MS_LOGIN_BUTTON_CANDIDATES[0]
 
 # Microsoft login
 MS_EMAIL_INPUT = 'input[type="email"][name="loginfmt"]'

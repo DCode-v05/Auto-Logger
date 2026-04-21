@@ -98,6 +98,7 @@ class LoginCoordinator:
                         email=email,
                         password=password,
                         callbacks=callbacks,
+                        pms_ms_oauth_begin_url=self.settings.pms_ms_oauth_begin_url,
                     )
                 self.session_store.save(chat_id, email=resolved_email, status="ok")
                 await self.bot.send_message(

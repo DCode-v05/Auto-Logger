@@ -25,6 +25,12 @@ class Settings(BaseSettings):
         return f"{self.pms_base_url.rstrip('/')}/login/"
 
     @property
+    def pms_ms_oauth_begin_url(self) -> str:
+        """social-auth-django's 'begin' URL for AzureAD OAuth2. Hitting this
+        immediately redirects to Microsoft's login page — no button click needed."""
+        return f"{self.pms_base_url.rstrip('/')}/login/azuread-oauth2/"
+
+    @property
     def pms_daily_log_create_url(self) -> str:
         return f"{self.pms_base_url.rstrip('/')}/me/daily_log/create/"
 

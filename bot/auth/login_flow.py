@@ -52,21 +52,27 @@ async def perform_login(
     email: str,
     password: str,
     callbacks: LoginCallbacks,
+    pms_ms_oauth_begin_url: str | None = None,
 ) -> str:
     """Log in and return the user's email (as the site reports it)."""
     page = await context.new_page()
     try:
-        await page.goto(pms_login_url, wait_until="domcontentloaded")
-
-        # If already authenticated, iqube may redirect to /me/ on its own.
-        if "/me/" in page.url and "/login" not in page.url:
+        # Fast path: if a session cookie is still valid, iqube redirects /me/ to itself.
+        await page.goto(pms_me_url, wait_until="domcontentloaded")
+        if _is_iqube_me(page.url, pms_me_url):
             return await _extract_email(page) or email
 
-        # Click "Sign in with Microsoft"
-        try:
-            await page.locator(S.IQUBE_MS_LOGIN_BUTTON).first.click(timeout=10_000)
-        except PWTimeoutError as e:
-            raise LoginError("Could not find Microsoft sign-in button on iqube login page") from e
+        # Otherwise go straight to social-auth's AzureAD begin URL — this is what
+        # the "Sign in with Microsoft" button on the PMS login page links to.
+        # Navigating here triggers the OAuth redirect to Microsoft without any
+        # button click on the PMS side.
+        begin_url = pms_ms_oauth_begin_url or f"{pms_login_url.rstrip('/')}/azuread-oauth2/"
+        await page.goto(begin_url, wait_until="domcontentloaded")
+
+        # If we're already authenticated with Microsoft in this browser context,
+        # MS may redirect us straight back to iqube.
+        if _is_iqube_me(page.url, pms_me_url):
+            return await _extract_email(page) or email
 
         # Microsoft: email page
         await page.wait_for_selector(S.MS_EMAIL_INPUT, timeout=30_000)

@@ -38,7 +38,7 @@ def create_app(settings: Settings, coordinator: LoginCoordinator) -> FastAPI:
 
     @app.post("/webapp/login")
     async def login_submit(
-        init_data: str = Form(..., alias="initData"),
+        init_data: str = Form(""),
         email: str = Form(...),
         password: str = Form(...),
     ) -> JSONResponse:
@@ -66,7 +66,7 @@ def create_app(settings: Settings, coordinator: LoginCoordinator) -> FastAPI:
 
     @app.post("/webapp/mfa")
     async def mfa_submit(
-        init_data: str = Form(..., alias="initData"),
+        init_data: str = Form(""),
         code: str = Form(...),
     ) -> JSONResponse:
         try:
