@@ -31,15 +31,60 @@ MS_MFA_NUMBER_MATCH_DISPLAY = '#idRichContext_DisplaySign'  # 2-digit number sho
 MS_ERROR_BOX = '#usernameError, #passwordError, [role="alert"]'
 
 # PMS Daily Log form (/me/daily_log/create/)
-FORM_ACTIVITIES = '#id_activities_done'
-FORM_TIME_SPENT = '#id_time_spent'
-FORM_LOCATION = '#id_location'
-FORM_LOCATION_OTHER = '#id_location_other, input[name="location_other"]'
-FORM_REFERENCE_LINK = '#id_reference_link'
-FORM_ATTACHMENT = 'input[type="file"][name="attachment"], input[type="file"]'
-FORM_DESCRIPTION_TEXTAREA = '#id_description'  # CKEditor may wrap this
+# Each list is tried in order; first visible match wins.
+FORM_ACTIVITIES_CANDIDATES = [
+    'input[name="activities_done"]',
+    'input[name="activities"]',
+    '#id_activities_done',
+    '#activities_done',
+    'textarea[name="activities_done"]',
+]
+FORM_TIME_SPENT_CANDIDATES = [
+    'input[name="time_spent"]',
+    'input[name="hours"]',
+    'input[name="time"]',
+    '#id_time_spent',
+    '#time_spent',
+]
+FORM_LOCATION_CANDIDATES = [
+    'select[name="location"]',
+    '#id_location',
+    '#location',
+]
+FORM_LOCATION_OTHER_CANDIDATES = [
+    'input[name="location_other"]',
+    'input[name="other_location"]',
+    'input[name="specify"]',
+    '#id_location_other',
+    '#location_other',
+]
+FORM_REFERENCE_LINK_CANDIDATES = [
+    'input[name="reference_link"]',
+    'input[name="reference"]',
+    'input[name="link"]',
+    '#id_reference_link',
+]
+FORM_ATTACHMENT_CANDIDATES = [
+    'input[type="file"][name="attachment"]',
+    'input[type="file"][name="file"]',
+    'input[type="file"]',
+]
+FORM_DESCRIPTION_CANDIDATES = [
+    'textarea[name="description"]',
+    '#id_description',
+    '#description',
+]
 FORM_SUBMIT_BUTTON = 'button[type="submit"], input[type="submit"]'
-FORM_ERROR_LIST = '.errorlist li, .invalid-feedback'
+FORM_ERROR_LIST = '.errorlist li, .invalid-feedback, .alert-danger'
+
+# Back-compat (legacy, still referenced by some test code)
+FORM_ACTIVITIES = FORM_ACTIVITIES_CANDIDATES[0]
+FORM_TIME_SPENT = FORM_TIME_SPENT_CANDIDATES[0]
+FORM_LOCATION = FORM_LOCATION_CANDIDATES[0]
+FORM_LOCATION_OTHER = FORM_LOCATION_OTHER_CANDIDATES[0]
+FORM_REFERENCE_LINK = FORM_REFERENCE_LINK_CANDIDATES[0]
+FORM_ATTACHMENT = FORM_ATTACHMENT_CANDIDATES[0]
+FORM_DESCRIPTION_TEXTAREA = FORM_DESCRIPTION_CANDIDATES[0]
 
 # PMS navigation
 PMS_DAILY_LOG_CREATE_PATH = '/me/daily_log/create/'
