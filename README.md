@@ -33,28 +33,39 @@ and is never written to disk.
 - A Windows server that stays on.
 - **Docker Desktop** installed and running (uses the WSL 2 backend — Linux
   containers work transparently on Windows).
-- A domain attached to a **Cloudflare** account. If you don't own one, grab a
-  cheap `.xyz`/`.me` (~$2/yr) and add it to Cloudflare (free). Named tunnels
-  require a domain; ad-hoc tunnel URLs change on every restart and break
-  Telegram's saved domain.
+- A free **Tailscale** account (<https://tailscale.com>). Tailscale Funnel
+  exposes the bot over public HTTPS with a stable `*.ts.net` URL — no domain
+  needed, no cost.
 - A Telegram bot token from [@BotFather](https://t.me/BotFather).
 
 ## Deploy
 
-### 1. Create the Cloudflare Tunnel in the dashboard
+### 1. Prepare Tailscale (one-time, ~3 min)
 
-Cloudflare Zero Trust → *Networks → Tunnels → Create a tunnel* → "Cloudflared"
-→ name it `pms-bot`. Copy the **token** shown on the install page.
+Sign up at <https://tailscale.com>. Then in the admin console at
+<https://login.tailscale.com/admin/>:
 
-On the same tunnel, add a **Public Hostname**:
+1. **DNS** → **HTTPS Certificates** → *Enable HTTPS*. Required for Funnel.
+2. **Access Controls** → edit the policy file so your devices are allowed to
+   use Funnel. Add or merge this top-level block:
 
-- Subdomain: `pms-bot`
-- Domain: *your domain*
-- Service: `HTTP` → `bot:8765` *(this hostname resolves inside the Docker network)*
+   ```json
+   "nodeAttrs": [
+     { "target": ["*"], "attr": ["funnel"] }
+   ]
+   ```
+
+3. **Settings → Keys → Generate auth key**:
+   - Reusable: **on** (so `docker compose up` can re-auth cleanly).
+   - Ephemeral: **off** (we want the device to persist).
+   - Copy the `tskey-auth-…` value.
+4. Note your **tailnet name** from the admin console header — it looks like
+   `tail-xxxx.ts.net`. Your bot's public URL will be
+   `https://pms-bot.<tailnet-name>.ts.net`.
 
 ### 2. Clone and configure
 
-Open PowerShell on the server:
+In PowerShell on the server:
 
 ```powershell
 git clone <your-repo-url> C:\pms-telegram-bot
@@ -70,36 +81,37 @@ Edit `.env` and fill in:
 ```
 TELEGRAM_BOT_TOKEN=123456:ABC-from-BotFather
 BOT_ENCRYPTION_KEY=<the-fernet-key-you-just-generated>
-BOT_PUBLIC_URL=https://pms-bot.yourdomain.com
-CLOUDFLARED_TOKEN=<the-tunnel-token-from-step-1>
+BOT_PUBLIC_URL=https://pms-bot.<your-tailnet>.ts.net
+TS_AUTHKEY=tskey-auth-...from-step-1...
 ```
 
 ### 3. Start everything
 
 ```powershell
 docker compose up -d --build
-docker compose logs -f          # watch it boot, Ctrl+C to stop tailing
+docker compose logs -f           # watch it boot, Ctrl+C to stop tailing
 ```
 
 Two containers come up:
 
 - **`pms-bot`** — the Telegram bot + FastAPI + Playwright Chromium pool.
-- **`pms-bot-tunnel`** — cloudflared, exposing `bot:8765` at
-  `https://pms-bot.yourdomain.com`.
+- **`pms-bot-tailscale`** — Tailscale with Funnel enabled, proxying
+  `https://pms-bot.<tailnet>.ts.net` → `http://bot:8765` inside the Docker
+  network.
 
-Both use `restart: unless-stopped`, so they come back automatically on server
-reboot (as long as Docker Desktop is set to start with Windows — *Settings →
-General → Start Docker Desktop when you sign in*).
+Both use `restart: unless-stopped`, so they come back on server reboot
+(as long as Docker Desktop is set to start with Windows — *Settings → General
+→ Start Docker Desktop when you sign in*).
 
 ### 4. Tell Telegram about the domain
 
 BotFather → `/mybots` → your bot → *Bot Settings → Domain* → enter
-`pms-bot.yourdomain.com`. Required for Web App buttons to render.
+`pms-bot.<your-tailnet>.ts.net` (no `https://` prefix).
 
 ### 5. Verify
 
 ```powershell
-curl https://pms-bot.yourdomain.com/healthz   # -> {"status":"ok"}
+curl https://pms-bot.<your-tailnet>.ts.net/healthz    # -> {"status":"ok"}
 ```
 
 Open your bot in Telegram → `/start` → `/login`.
@@ -133,8 +145,9 @@ python -m bot.main
 - The bot's host owns the Playwright user-data-dirs, which contain users'
   active Django session cookies. **Restrict filesystem access on the host.**
 - `BOT_ENCRYPTION_KEY` (Fernet) encrypts the email column in SQLite.
-- Communication from the Web App form to the bot server is HTTPS via the
-  Cloudflare tunnel. `_initData` is verified with HMAC-SHA256 using the bot
+- Communication from the Web App form to the bot server is HTTPS via
+  Tailscale Funnel (public cert from Let's Encrypt, terminated at the
+  Tailscale edge). `_initData` is verified with HMAC-SHA256 using the bot
   token, so the public endpoints cannot be abused to start logins for
   arbitrary users.
 - **This bot signs in to a college system on users' behalf.** Get explicit
