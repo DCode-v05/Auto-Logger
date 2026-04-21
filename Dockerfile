@@ -8,8 +8,8 @@ COPY bot/ ./bot/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-RUN useradd -m -u 1000 bot && chown -R bot:bot /app
-USER bot
+RUN chown -R pwuser:pwuser /app
+USER pwuser
 
 ENV PYTHONUNBUFFERED=1 \
     FASTAPI_HOST=0.0.0.0 \
