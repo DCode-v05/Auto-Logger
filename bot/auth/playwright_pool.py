@@ -117,14 +117,22 @@ class PlaywrightPool:
             while True:
                 await asyncio.sleep(max(30, self.idle_close_seconds // 4))
                 cutoff = time.monotonic() - self.idle_close_seconds
-                to_close: list[int] = []
                 async with self._global_lock:
-                    for chat_id, entry in list(self._entries.items()):
-                        if entry.last_used < cutoff and not entry.lock.locked():
-                            to_close.append(chat_id)
-                for chat_id in to_close:
-                    log.info("reaping idle playwright context for %s", chat_id)
-                    await self.close_for(chat_id)
+                    for chat_id in list(self._entries.keys()):
+                        entry = self._entries.get(chat_id)
+                        if not entry:
+                            continue
+                        if entry.last_used >= cutoff or entry.lock.locked():
+                            continue
+                        # Pop and close atomically under the global lock so
+                        # a concurrent acquire() cannot grab an entry we're
+                        # about to tear down.
+                        self._entries.pop(chat_id, None)
+                        log.info("reaping idle playwright context for %s", chat_id)
+                        try:
+                            await entry.context.close()
+                        except Exception:  # noqa: BLE001
+                            log.exception("error closing context for %s", chat_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001

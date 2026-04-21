@@ -33,12 +33,12 @@ def create_app(settings: Settings, coordinator: LoginCoordinator) -> FastAPI:
 
     @app.post("/webapp/login")
     async def login_submit(
-        _initData: str = Form(..., alias="_initData"),
+        init_data: str = Form(..., alias="initData"),
         email: str = Form(...),
         password: str = Form(...),
     ) -> JSONResponse:
         try:
-            verified = verify_init_data(_initData, settings.telegram_bot_token)
+            verified = verify_init_data(init_data, settings.telegram_bot_token)
         except InitDataError as e:
             raise HTTPException(status_code=401, detail=f"invalid initData: {e}")
 
@@ -61,11 +61,11 @@ def create_app(settings: Settings, coordinator: LoginCoordinator) -> FastAPI:
 
     @app.post("/webapp/mfa")
     async def mfa_submit(
-        _initData: str = Form(..., alias="_initData"),
+        init_data: str = Form(..., alias="initData"),
         code: str = Form(...),
     ) -> JSONResponse:
         try:
-            verified = verify_init_data(_initData, settings.telegram_bot_token)
+            verified = verify_init_data(init_data, settings.telegram_bot_token)
         except InitDataError as e:
             raise HTTPException(status_code=401, detail=f"invalid initData: {e}")
         code = code.strip()

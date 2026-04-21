@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time as _time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -104,10 +105,10 @@ async def _handle_post_password(
     page: Page, pms_me_url: str, callbacks: LoginCallbacks
 ) -> None:
     # Race several possible next-states.
-    deadline = asyncio.get_event_loop().time() + callbacks.mfa_timeout_seconds
+    deadline = _time.monotonic() + callbacks.mfa_timeout_seconds
 
     while True:
-        remaining = deadline - asyncio.get_event_loop().time()
+        remaining = deadline - _time.monotonic()
         if remaining <= 0:
             raise MFATimeout("Login timed out waiting for MFA / redirect")
 
@@ -190,7 +191,7 @@ def _is_iqube_me(url: str, pms_me_url: str) -> bool:
 async def _visible(page: Page, selector: str) -> bool:
     try:
         el = page.locator(selector).first
-        return await el.is_visible(timeout=500)
+        return await el.is_visible()
     except PWTimeoutError:
         return False
     except Exception:  # noqa: BLE001
@@ -200,7 +201,7 @@ async def _visible(page: Page, selector: str) -> bool:
 async def _text_or_none(page: Page, selector: str) -> str | None:
     try:
         el = page.locator(selector).first
-        if await el.is_visible(timeout=500):
+        if await el.is_visible():
             return await el.inner_text()
     except Exception:  # noqa: BLE001
         return None
@@ -210,7 +211,7 @@ async def _text_or_none(page: Page, selector: str) -> str | None:
 async def _scrape_ms_error(page: Page) -> str | None:
     try:
         el = page.locator(S.MS_ERROR_BOX).first
-        if await el.is_visible(timeout=500):
+        if await el.is_visible():
             return (await el.inner_text()).strip()
     except Exception:  # noqa: BLE001
         return None
@@ -223,7 +224,7 @@ async def _extract_email(page: Page) -> str | None:
         # iqube shows user's name/email in the header; try common selectors.
         for sel in ['[data-user-email]', 'a[href*="mailto:"]']:
             loc = page.locator(sel).first
-            if await loc.count() and await loc.is_visible(timeout=500):
+            if await loc.count() and await loc.is_visible():
                 val = await loc.get_attribute("data-user-email") or await loc.inner_text()
                 if val and "@" in val:
                     return val.strip()

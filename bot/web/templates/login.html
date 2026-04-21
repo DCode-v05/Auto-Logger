@@ -63,7 +63,7 @@
       btn.disabled = true;
       btn.textContent = 'Signing in…';
       const data = new FormData(form);
-      data.append('_initData', tg?.initData || '');
+      data.append('initData', tg?.initData || '');
       try {
         const res = await fetch('/webapp/login', { method: 'POST', body: data });
         if (!res.ok) {
