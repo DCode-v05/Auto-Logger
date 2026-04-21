@@ -1,0 +1,31 @@
+services:
+  bot:
+    build: .
+    container_name: pms-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      BOT_ENCRYPTION_KEY: ${BOT_ENCRYPTION_KEY}
+      BOT_PUBLIC_URL: ${BOT_PUBLIC_URL}
+      PMS_BASE_URL: ${PMS_BASE_URL:-https://iqube.therig.in}
+      FASTAPI_HOST: "0.0.0.0"
+      FASTAPI_PORT: "8765"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    networks:
+      - pms-bot-net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: pms-bot-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    depends_on:
+      - bot
+    networks:
+      - pms-bot-net
+
+networks:
+  pms-bot-net:
+    driver: bridge
