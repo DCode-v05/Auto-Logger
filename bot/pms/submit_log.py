@@ -218,4 +218,13 @@ def _is_list_page(url: str, list_url: str) -> bool:
 
 
 def _looks_like_login(url: str, login_url: str) -> bool:
-    return url.rstrip("/").startswith(login_url.rstrip("/")) or "/login" in url
+    # Direct login page
+    if url.rstrip("/").startswith(login_url.rstrip("/")):
+        return True
+    if "/login" in url:
+        return True
+    # Django @login_required bounces to the site root with ?next=... when the
+    # LOGIN_URL points at '/' (iqube does this).
+    if "?next=" in url or "&next=" in url:
+        return True
+    return False

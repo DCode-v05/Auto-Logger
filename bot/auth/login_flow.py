@@ -59,7 +59,9 @@ async def perform_login(
     try:
         # Fast path: if a session cookie is still valid, iqube redirects /me/ to itself.
         await page.goto(pms_me_url, wait_until="domcontentloaded")
+        log.info("login step 1 (GET /me/): landed on %s", page.url)
         if _is_iqube_me(page.url, pms_me_url):
+            log.info("login step 1: already authenticated; skipping OAuth")
             return await _extract_email(page) or email
 
         # Otherwise go straight to social-auth's AzureAD begin URL — this is what
@@ -67,14 +69,33 @@ async def perform_login(
         # Navigating here triggers the OAuth redirect to Microsoft without any
         # button click on the PMS side.
         begin_url = pms_ms_oauth_begin_url or f"{pms_login_url.rstrip('/')}/azuread-oauth2/"
+        log.info("login step 2: navigating to OAuth begin URL %s", begin_url)
         await page.goto(begin_url, wait_until="domcontentloaded")
+        log.info("login step 2: landed on %s", page.url)
 
         # If we're already authenticated with Microsoft in this browser context,
         # MS may redirect us straight back to iqube.
         if _is_iqube_me(page.url, pms_me_url):
+            log.info("login step 2: redirected straight to iqube /me/; no MS login needed")
             return await _extract_email(page) or email
 
+        # Sanity: we should be on login.microsoftonline.com by now.
+        if "login.microsoftonline.com" not in page.url and "microsoft.com" not in page.url:
+            try:
+                html_head = (await page.content())[:2000]
+            except Exception:  # noqa: BLE001
+                html_head = "<unreadable>"
+            log.error(
+                "login step 2: expected Microsoft login, got %s\nHTML:\n%s",
+                page.url, html_head,
+            )
+            raise LoginError(
+                f"Expected Microsoft sign-in, but ended up at {page.url}. "
+                "Is the OAuth backend misconfigured on iqube.therig.in?"
+            )
+
         # Microsoft: email page
+        log.info("login step 3: waiting for MS email input")
         await page.wait_for_selector(S.MS_EMAIL_INPUT, timeout=30_000)
         await page.fill(S.MS_EMAIL_INPUT, email)
         await page.click(S.MS_EMAIL_NEXT_BUTTON)
@@ -100,6 +121,7 @@ async def perform_login(
         #   - "Stay signed in?" Yes/No prompt (then success)
         #   - wrong password error
         await _handle_post_password(page, pms_me_url, callbacks)
+        log.info("login step 5: post-password handling finished; final url=%s", page.url)
 
         email_final = await _extract_email(page)
         return email_final or email
@@ -190,8 +212,11 @@ async def _handle_post_password(
 
 
 def _is_iqube_me(url: str, pms_me_url: str) -> bool:
+    # pms_me_url is like 'https://iqube.therig.in/me/'.  We want to match
+    # '/me' itself or '/me/...anything...' but NOT '/media', '/mentor', etc.
     base = pms_me_url.rstrip("/")
-    return url.rstrip("/").startswith(base)
+    u = url.rstrip("/")
+    return u == base or u.startswith(base + "/")
 
 
 async def _visible(page: Page, selector: str) -> bool:

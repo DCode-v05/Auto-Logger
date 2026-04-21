@@ -100,6 +100,27 @@ class LoginCoordinator:
                         callbacks=callbacks,
                         pms_ms_oauth_begin_url=self.settings.pms_ms_oauth_begin_url,
                     )
+                    # Verify the login actually produced a session cookie before
+                    # announcing success — perform_login could return early if
+                    # URL checks matched something non-authenticated.
+                    all_cookies = await ctx.cookies()
+                    pms_host_cookies = [
+                        c for c in all_cookies
+                        if "iqube.therig.in" in (c.get("domain") or "")
+                    ]
+                    cookie_names = sorted(c.get("name") for c in pms_host_cookies)
+                    log.info(
+                        "post-login cookies for iqube.therig.in: %s", cookie_names
+                    )
+                    has_session = any(
+                        c.get("name") == "sessionid" for c in pms_host_cookies
+                    )
+                    if not has_session:
+                        raise LoginError(
+                            "Login appeared to finish but no session cookie was "
+                            "set. Check that the college account is approved on "
+                            f"iqube.therig.in (visible cookies: {cookie_names})"
+                        )
                 self.session_store.save(chat_id, email=resolved_email, status="ok")
                 await self.bot.send_message(
                     chat_id=chat_id,
