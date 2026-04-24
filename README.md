@@ -1,177 +1,196 @@
-# pms-telegram-bot
+# Auto Logger
 
-A Telegram bot that submits daily logs to `iqube.therig.in` on behalf of college
-users. The bot drives a headless Chromium (Playwright) per user to replay the
-site's Microsoft OAuth login and POST the real form — **no changes are made to
-the PMS server**.
+## Project Description
+Auto Logger is a Telegram bot that submits daily logs to the iQube PMS (`iqube.therig.in`) on behalf of college users. The bot drives a headless Chromium browser (via Playwright) per user to replay the site's Microsoft OAuth login and POST the real Daily Log form — no changes are made to the PMS server. Users interact entirely through Telegram: they sign in once via an in-chat Web App and thereafter post logs using the `/log` command, with form validation errors surfaced back to the chat.
 
-Phase 1 ships daily log submission. Future phases will layer in tasks, projects,
-announcements etc. by driving the same browser session against the rest of the
-site.
+---
 
-## How it works
+## Project Details
 
-1. User sends `/login` in Telegram.
-2. Bot opens a Telegram Web App with a Microsoft sign-in form (served by the bot
-   over HTTPS through a Cloudflare tunnel).
-3. User enters their college email + Microsoft password. The form posts to the
-   bot, which uses Playwright to navigate to `iqube.therig.in` and complete the
-   same Microsoft OAuth flow the website uses. MFA (push, number-matching, TOTP)
-   is handled with in-chat prompts and a second Web App for code entry.
-4. Django's `sessionid` cookie ends up in the per-user Chromium user-data-dir on
-   disk and persists across bot restarts (~2 weeks, same lifetime as on the
-   website).
-5. `/log` walks the user through the form fields and POSTs the final submission
-   through the same authenticated browser. Form errors from the site are
-   surfaced back to the chat.
+### Problem Statement
+Daily log submission on the iQube PMS portal is repetitive and requires navigating a Microsoft OAuth login (often with MFA) followed by a multi-field web form. Students and employees often forget to log entries, submit late, or lose time to the click-through flow. Auto Logger eliminates that friction by letting users submit the same log from Telegram in seconds, while re-using the exact authenticated browser session the website itself would use.
 
-The user's Microsoft password is **only held in memory** during the login flow
-and is never written to disk.
+### How It Works
+- **Login flow:** User sends `/login`. The bot opens a Telegram Web App with a Microsoft sign-in form served over HTTPS via a Tailscale Funnel. The password is posted once to the bot, which drives Playwright through the `iqube.therig.in` Microsoft OAuth flow.
+- **MFA handling:** Push, number-matching, and TOTP flows are detected automatically. In-chat prompts and a second Web App collect codes when needed.
+- **Session persistence:** Django's `sessionid` cookie lands in a per-user Chromium user-data-dir on disk and persists across bot restarts (~2 weeks — the same lifetime as on the website).
+- **Log submission:** `/log` launches a `ConversationHandler` that walks the user through activities, time spent, location, description, optional reference link, and optional attachment, then POSTs through the same authenticated browser.
+- **Security:** The user's Microsoft password is held only in memory during login and never written to disk. Email addresses in the SQLite store are encrypted with Fernet.
 
-## Prerequisites
+### Authentication & Session Management
+- **Microsoft OAuth replay:** Navigates directly to `social-auth-django`'s `/login/azuread-oauth2/` begin URL to skip the landing page click.
+- **Per-user Playwright pool:** Each chat_id owns its own Chromium `user-data-dir`. Idle sessions auto-close after a configurable timeout (`SESSION_IDLE_CLOSE_SECONDS`).
+- **Encrypted session store:** SQLite database with a Fernet-encrypted email column; `chat_id` → `(email, status)` mapping.
+- **Telegram Web App verification:** `initData` is verified with HMAC-SHA256 against the bot token, so the public `/webapp/*` endpoints cannot be abused to start logins for arbitrary users.
 
-- A Windows server that stays on.
-- **Docker Desktop** installed and running (uses the WSL 2 backend — Linux
-  containers work transparently on Windows).
-- A free **Tailscale** account (<https://tailscale.com>). Tailscale Funnel
-  exposes the bot over public HTTPS with a stable `*.ts.net` URL — no domain
-  needed, no cost.
-- A Telegram bot token from [@BotFather](https://t.me/BotFather).
+### Bot Commands
+| Command | Purpose |
+|---------|---------|
+| `/start` | Welcome / status |
+| `/login` | Open the Microsoft sign-in Web App |
+| `/logout` | Delete session + wipe local browser profile |
+| `/whoami` | Show signed-in email and session status |
+| `/log` | Guided Daily Log submission |
+| `/recent` | View recently submitted logs |
 
-## Deploy
+### Web Application
+A lightweight FastAPI app (served behind Tailscale Funnel) hosts the Telegram Web App forms used during login:
+- Microsoft email + password entry
+- MFA code / number-matching confirmation
+- HTTPS-only, HMAC-verified `_initData` on every request
 
-### 1. Prepare Tailscale (one-time, ~3 min)
+---
 
-Sign up at <https://tailscale.com>. Then in the admin console at
-<https://login.tailscale.com/admin/>:
+## Tech Stack
+- **Python 3.10+**
+- **python-telegram-bot** (`[webhooks]`) — Telegram Bot API + ConversationHandler
+- **Playwright** (Chromium) — headless browser automation for Microsoft OAuth + form POST
+- **FastAPI + Uvicorn** — Web App endpoints (login form, MFA form, healthz)
+- **cryptography (Fernet)** — at-rest encryption of stored emails
+- **Pydantic / pydantic-settings** — typed configuration from `.env`
+- **Jinja2** — Web App HTML templates
+- **SQLite** — per-chat session metadata
+- **Tailscale Funnel** — public HTTPS URL without a domain
+- **Docker Compose** — one-command deploy (bot + tailscale sidecar)
+- **pytest / pytest-asyncio / ruff** — testing & linting
 
-1. **DNS** → **HTTPS Certificates** → *Enable HTTPS*. Required for Funnel.
-2. **Access Controls** → edit the policy file so your devices are allowed to
-   use Funnel. Add or merge this top-level block:
+---
 
-   ```json
-   "nodeAttrs": [
-     { "target": ["*"], "attr": ["funnel"] }
-   ]
-   ```
+## Getting Started
 
-3. **Settings → Keys → Generate auth key**:
-   - Reusable: **on** (so `docker compose up` can re-auth cleanly).
-   - Ephemeral: **off** (we want the device to persist).
-   - Copy the `tskey-auth-…` value.
-4. Note your **tailnet name** from the admin console header — it looks like
-   `tail-xxxx.ts.net`. Your bot's public URL will be
-   `https://pms-bot.<tailnet-name>.ts.net`.
-
-### 2. Clone and configure
-
-In PowerShell on the server:
-
-```powershell
-git clone <your-repo-url> C:\pms-telegram-bot
-cd C:\pms-telegram-bot
-copy .env.example .env
-
-# Generate the Fernet key
-python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+### 1. Clone the repository
+```
+git clone https://github.com/DCode-v05/Auto-Logger.git
+cd Auto-Logger
 ```
 
-Edit `.env` and fill in:
-
+### 2. Configure environment
+```
+copy .env.example .env
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+Fill in `.env` with:
 ```
 TELEGRAM_BOT_TOKEN=123456:ABC-from-BotFather
 BOT_ENCRYPTION_KEY=<the-fernet-key-you-just-generated>
 BOT_PUBLIC_URL=https://pms-bot.<your-tailnet>.ts.net
-TS_AUTHKEY=tskey-auth-...from-step-1...
+TS_AUTHKEY=tskey-auth-...
 ```
 
-### 3. Start everything
-
-```powershell
+### 3. Deploy with Docker (recommended)
+```
 docker compose up -d --build
-docker compose logs -f           # watch it boot, Ctrl+C to stop tailing
+docker compose logs -f
 ```
-
 Two containers come up:
+- `pms-bot` — Telegram bot + FastAPI + Playwright Chromium pool
+- `pms-bot-tailscale` — Tailscale with Funnel, proxying `https://pms-bot.<tailnet>.ts.net` → `http://bot:8765`
 
-- **`pms-bot`** — the Telegram bot + FastAPI + Playwright Chromium pool.
-- **`pms-bot-tailscale`** — Tailscale with Funnel enabled, proxying
-  `https://pms-bot.<tailnet>.ts.net` → `http://bot:8765` inside the Docker
-  network.
+Then in BotFather → `/mybots` → *Bot Settings → Domain* → enter `pms-bot.<your-tailnet>.ts.net`.
 
-Both use `restart: unless-stopped`, so they come back on server reboot
-(as long as Docker Desktop is set to start with Windows — *Settings → General
-→ Start Docker Desktop when you sign in*).
-
-### 4. Tell Telegram about the domain
-
-BotFather → `/mybots` → your bot → *Bot Settings → Domain* → enter
-`pms-bot.<your-tailnet>.ts.net` (no `https://` prefix).
-
-### 5. Verify
-
-```powershell
-curl https://pms-bot.<your-tailnet>.ts.net/healthz    # -> {"status":"ok"}
+### 4. Run locally for development
 ```
-
-Open your bot in Telegram → `/start` → `/login`.
-
-## Updating
-
-```powershell
-cd C:\pms-telegram-bot
-git pull
-docker compose up -d --build
-```
-
-## Running locally for development
-
-Needs Python 3.11+ and Playwright's Chromium on your laptop, plus any public
-HTTPS URL pointing at the FastAPI port. The easiest way is a named Cloudflare
-tunnel the same way as the server deploy, just pointing at `http://localhost:8765`
-from your laptop.
-
-```powershell
 pip install -e .
 python -m playwright install chromium
-copy .env.example .env   # fill TELEGRAM_BOT_TOKEN, BOT_PUBLIC_URL, BOT_ENCRYPTION_KEY
 python -m bot.main
 ```
 
-## Security notes
+### 5. Verify
+```
+curl https://pms-bot.<your-tailnet>.ts.net/healthz    # -> {"status":"ok"}
+```
+Open the bot in Telegram → `/start` → `/login`.
 
-- The bot handles the user's Microsoft password in memory only, for the
-  duration of one login call. It is never persisted.
-- The bot's host owns the Playwright user-data-dirs, which contain users'
-  active Django session cookies. **Restrict filesystem access on the host.**
-- `BOT_ENCRYPTION_KEY` (Fernet) encrypts the email column in SQLite.
-- Communication from the Web App form to the bot server is HTTPS via
-  Tailscale Funnel (public cert from Let's Encrypt, terminated at the
-  Tailscale edge). `_initData` is verified with HMAC-SHA256 using the bot
-  token, so the public endpoints cannot be abused to start logins for
-  arbitrary users.
-- **This bot signs in to a college system on users' behalf.** Get explicit
-  approval from iQube admins before deploying it.
+---
+
+## Usage
+- Send `/login` in Telegram and complete Microsoft sign-in via the Web App button.
+- Once signed in, send `/log` and answer the prompts (activities, time spent, location, description, optional reference link, optional attachment).
+- Review the summary, confirm, and the bot POSTs the Daily Log on your behalf.
+- Use `/recent` to see your last submissions or `/logout` to clear your session and wipe the local browser profile.
+
+---
+
+## Project Structure
+```
+Auto-Logger/
+│
+├── bot/
+│   ├── main.py                     # Entry point — boots PTB + FastAPI + Playwright pool
+│   ├── config.py                   # Pydantic settings loaded from .env
+│   ├── auth/
+│   │   ├── login_flow.py           # Replays the iQube Microsoft OAuth login
+│   │   ├── playwright_pool.py      # Per-chat_id Chromium lifecycle
+│   │   ├── session_store.py        # SQLite + Fernet encrypted email store
+│   │   └── telegram_initdata.py    # Telegram Web App HMAC verification
+│   ├── handlers/
+│   │   ├── start.py                # /start, /login, /logout, /whoami
+│   │   ├── submit_log.py           # /log ConversationHandler
+│   │   └── errors.py               # Global error handler
+│   ├── pms/
+│   │   ├── submit_log.py           # Fills and submits the Daily Log form
+│   │   └── selectors.py            # HTML selectors — the one place HTML coupling lives
+│   ├── utils/
+│   │   ├── keyboards.py            # Inline keyboard builders
+│   │   └── validators.py           # Input validators (URL, time, description)
+│   └── web/
+│       ├── app.py                  # FastAPI endpoints for the Web App forms
+│       ├── coordinator.py          # Bridges Web App ↔ Telegram ↔ Playwright
+│       └── templates/              # Jinja2 HTML for login / MFA forms
+├── data/
+│   ├── profiles/                   # Per-user Playwright user-data-dirs
+│   └── tmp/                        # Attachment downloads
+├── tests/
+│   ├── test_initdata.py
+│   ├── test_session_store.py
+│   └── test_validators.py
+├── Dockerfile
+├── docker-compose.yml
+├── tailscale-serve.json            # Tailscale Funnel config (port 8765)
+├── pyproject.toml
+├── .env.example
+└── README.md
+```
+
+---
+
+## Security Notes
+- The bot handles the user's Microsoft password **in memory only**, for the duration of one login call. It is never persisted.
+- The bot's host owns the Playwright `user-data-dirs`, which contain users' active Django session cookies. **Restrict filesystem access on the host.**
+- `BOT_ENCRYPTION_KEY` (Fernet) encrypts the email column in SQLite at rest.
+- Web App ↔ bot communication is HTTPS via Tailscale Funnel (Let's Encrypt cert at the Tailscale edge). `initData` is HMAC-verified on every request.
+- **This bot signs in to a college system on users' behalf.** Get explicit approval from the iQube admins before deploying it.
+
+---
 
 ## Troubleshooting
-
-- *"invalid initData"* — the user opened the Web App outside Telegram, or the
-  `TELEGRAM_BOT_TOKEN` in `.env` doesn't match the bot the button came from.
-- *"Could not find Microsoft sign-in button"* — iqube.therig.in changed its
-  HTML. Update selectors in [`bot/pms/selectors.py`](bot/pms/selectors.py).
+- *"invalid initData"* — the user opened the Web App outside Telegram, or `TELEGRAM_BOT_TOKEN` in `.env` doesn't match the bot the button came from.
+- *"Could not find Microsoft sign-in button"* — iqube.therig.in changed its HTML. Update selectors in [bot/pms/selectors.py](bot/pms/selectors.py).
 - *MFA timeout* — bump `MFA_TIMEOUT_SECONDS` in `.env`.
-- *Form always rejects* — set `LOG_LEVEL=DEBUG` in `.env`, restart, inspect
-  the scraped error messages; compare to the form's own validation.
+- *Form always rejects* — set `LOG_LEVEL=DEBUG` in `.env`, restart, inspect the scraped error messages; compare to the form's own validation.
 
-## Layout
+---
 
-- `bot/main.py` — boots everything
-- `bot/web/app.py` — FastAPI endpoints for the Web App forms
-- `bot/web/coordinator.py` — bridges the Web App + Telegram + Playwright login
-- `bot/auth/login_flow.py` — replays the iqube Microsoft OAuth login
-- `bot/auth/playwright_pool.py` — per-chat_id Chromium lifecycle
-- `bot/auth/session_store.py` — SQLite + Fernet
-- `bot/auth/telegram_initdata.py` — Telegram Web App HMAC verification
-- `bot/pms/submit_log.py` — fills and submits the Daily Log form
-- `bot/pms/selectors.py` — **the one place HTML coupling to iqube lives**
-- `bot/handlers/submit_log.py` — the `/log` ConversationHandler
+## Contributing
+
+Contributions are welcome! To contribute:
+1. Fork the repository
+2. Create a new branch:
+   ```bash
+   git checkout -b feature/your-feature
+   ```
+3. Commit your changes:
+   ```bash
+   git commit -m "Add your feature"
+   ```
+4. Push to your branch:
+   ```bash
+   git push origin feature/your-feature
+   ```
+5. Open a pull request describing your changes.
+
+---
+
+## Contact
+- **GitHub:** [DCode-v05](https://github.com/DCode-v05)
+- **Email:** denistanb05@gmail.com

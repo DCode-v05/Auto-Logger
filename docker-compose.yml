@@ -15,7 +15,6 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - pms-bot-net
-    # No ports published to the host — only the Tailscale sidecar reaches it.
 
   tailscale:
     image: tailscale/tailscale:latest
