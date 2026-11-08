@@ -70,7 +70,6 @@ class LoginCoordinator:
                     "I'm sending now."
                 ),
             )
-            # Send a second Web App button for MFA entry
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
             mfa_url = f"{self.settings.bot_public_url.rstrip('/')}/webapp/mfa"
@@ -100,9 +99,6 @@ class LoginCoordinator:
                         callbacks=callbacks,
                         pms_ms_oauth_begin_url=self.settings.pms_ms_oauth_begin_url,
                     )
-                    # Verify the login actually produced a session cookie before
-                    # announcing success — perform_login could return early if
-                    # URL checks matched something non-authenticated.
                     all_cookies = await ctx.cookies()
                     pms_host_cookies = [
                         c for c in all_cookies

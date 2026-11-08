@@ -57,7 +57,6 @@ def create_app(settings: Settings, coordinator: LoginCoordinator) -> FastAPI:
             await coordinator.start_login(verified.user_id, email, password)
         except RuntimeError as e:
             raise HTTPException(status_code=409, detail=str(e))
-        # Password is no longer needed here; let it fall out of scope.
         return JSONResponse({"status": "started"})
 
     @app.get("/webapp/mfa", response_class=HTMLResponse)

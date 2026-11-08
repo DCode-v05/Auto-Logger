@@ -79,7 +79,6 @@ async def _run() -> None:
             try:
                 loop.add_signal_handler(sig, _stop)
             except NotImplementedError:
-                # Windows doesn't support add_signal_handler; rely on KeyboardInterrupt
                 pass
 
         server_task = asyncio.create_task(server.serve())

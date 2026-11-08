@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 class Session:
     chat_id: int
     email: str
-    status: str  # 'ok' | 'expired' | 'logged_out'
+    status: str
     last_login: int
     last_used: int
 

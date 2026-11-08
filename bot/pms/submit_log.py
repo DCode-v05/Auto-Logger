@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 class LogPayload:
     activities: str
     time_spent: int
-    location: str  # one of S.LOCATION_IQUBE / LOCATION_HOME / LOCATION_OTHER
+    location: str
     location_other: str | None
     description: str
     reference_link: str | None = None
@@ -47,9 +47,6 @@ _CSRF_IN_HTML = re.compile(
 _INPUT_NAME = re.compile(
     r'<(?:input|select|textarea)[^>]*\bname=["\']([^"\']+)["\']', re.IGNORECASE
 )
-# Scope input-name parsing to the actual DailyLogForm — there are other forms
-# on the page (navbar search posts to /me/bigboss/) whose inputs would
-# otherwise be picked up and cause confusion.
 _DAILY_LOG_FORM_BLOCK = re.compile(
     r'<form[^>]*\bid=["\']DailyLogForm["\'][^>]*>(.*?)</form>',
     re.IGNORECASE | re.DOTALL,
@@ -77,8 +74,6 @@ async def submit_log(
     """
     page = await context.new_page()
     try:
-        # Log cookie names currently held for the PMS domain so we can tell if
-        # the session cookie is present without dumping its value.
         try:
             cookies = await context.cookies(create_url)
             names = [c.get("name") for c in cookies]
@@ -86,7 +81,6 @@ async def submit_log(
         except Exception:  # noqa: BLE001
             log.exception("could not list cookies")
 
-        # 1. Navigate to the form page so Chromium uses its cookie jar.
         await page.goto(create_url, wait_until="domcontentloaded")
         log.info("daily_log GET landed on %s", page.url)
         if _looks_like_login(page.url, login_url):
@@ -98,8 +92,6 @@ async def submit_log(
 
         html = await page.content()
 
-        # Scope parsing to the DailyLogForm block so we don't pick up the
-        # navbar search input (name="detail") or other unrelated forms.
         form_block_match = _DAILY_LOG_FORM_BLOCK.search(html)
         if not form_block_match:
             log.error(
@@ -120,15 +112,11 @@ async def submit_log(
         found_names = sorted({m.group(1) for m in _INPUT_NAME.finditer(form_html)})
         log.info("daily_log form fields on server: %s", found_names)
 
-        # Hardcoded field names matching the production HTML
-        # (iqube.therig.in DailyLogForm, verified 2026-04):
-        #   activities_done, time_spent, location, custom_location,
-        #   reference_link, attachment, description
         fields: dict[str, object] = {
             "csrfmiddlewaretoken": csrf,
             "activities_done": payload.activities,
             "time_spent": str(payload.time_spent),
-            "location": payload.location,  # "iQube" / "Home/Hostel" / "Other"
+            "location": payload.location,
             "description": payload.description,
         }
         if payload.location == S.LOCATION_OTHER and payload.location_other:
@@ -145,8 +133,6 @@ async def submit_log(
                 "buffer": att.read_bytes(),
             }
 
-        # 3. POST using the page's request context (shares cookies with this page).
-        #    max_redirects=0 so we can detect 302 -> list page ourselves.
         post_resp = await page.request.post(
             create_url,
             multipart=fields,
@@ -154,24 +140,20 @@ async def submit_log(
             max_redirects=0,
         )
 
-        # 4. Interpret the response.
         status = post_resp.status
         headers = post_resp.headers
         location_hdr = headers.get("location", "")
 
-        # Django form-view pattern: success = 302 to list page; failure = 200 + form re-rendered.
         if status in (301, 302):
             redir = location_hdr
             if _looks_like_login(redir, login_url):
                 raise ReLoginRequired("POST redirected to login")
             if _is_list_page(redir, list_url) or "/me/daily_log" in redir:
-                return  # success
-            # Some deployments redirect elsewhere after post; treat any non-login 302 as success.
+                return
             log.info("daily_log POST redirected to %s — assuming success", redir)
             return
 
         if status == 200:
-            # Re-rendered form — try to scrape errors
             body = await post_resp.text()
             errs = _scrape_errors_from_html(body)
             if errs:
@@ -196,7 +178,6 @@ def _scrape_errors_from_html(html: str) -> list[str]:
         inner = _TAG_STRIP.sub("", m.group(1)).strip()
         if inner and inner.lower() != "errors":
             out.append(inner)
-    # Dedupe preserving order
     seen: set[str] = set()
     deduped: list[str] = []
     for e in out:
@@ -211,13 +192,10 @@ def _is_list_page(url: str, list_url: str) -> bool:
 
 
 def _looks_like_login(url: str, login_url: str) -> bool:
-    # Direct login page
     if url.rstrip("/").startswith(login_url.rstrip("/")):
         return True
     if "/login" in url:
         return True
-    # Django @login_required bounces to the site root with ?next=... when the
-    # LOGIN_URL points at '/' (iqube does this).
     if "?next=" in url or "&next=" in url:
         return True
     return False

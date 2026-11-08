@@ -55,7 +55,6 @@ def _state(ctx: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
 
 
 def _reset(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    # Remove downloaded attachments
     st = ctx.user_data.get("log") or {}
     path = st.get("attachment_path")
     if path:
@@ -347,7 +346,6 @@ def register(
         except FormValidationError as e:
             pretty = "\n".join(f"• {m}" for m in e.messages) or str(e)
             await message.reply_text(f"The site rejected the form:\n{pretty}")
-            # Go back to review so the user can edit
             await message.reply_text(_summary(st), parse_mode="Markdown", reply_markup=K.review_keyboard())
             return REVIEW
         except SubmitError as e:

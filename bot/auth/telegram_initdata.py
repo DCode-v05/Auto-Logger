@@ -35,7 +35,6 @@ def verify_init_data(init_data: str, bot_token: str, max_age_seconds: int = 3600
     if not provided_hash:
         raise InitDataError("missing hash")
 
-    # Data-check-string: sorted `key=value` lines joined by \n
     data_check_string = "\n".join(f"{k}={pairs[k]}" for k in sorted(pairs))
 
     secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()

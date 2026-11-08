@@ -34,7 +34,7 @@ class PlaywrightPool:
         self.profiles_dir = profiles_dir
         self.idle_close_seconds = idle_close_seconds
         self._pw: Playwright | None = None
-        self._browser: Browser | None = None  # unused when using launch_persistent_context
+        self._browser: Browser | None = None
         self._entries: dict[int, _Entry] = {}
         self._global_lock = asyncio.Lock()
         self._reaper_task: asyncio.Task | None = None
@@ -124,9 +124,6 @@ class PlaywrightPool:
                             continue
                         if entry.last_used >= cutoff or entry.lock.locked():
                             continue
-                        # Pop and close atomically under the global lock so
-                        # a concurrent acquire() cannot grab an entry we're
-                        # about to tear down.
                         self._entries.pop(chat_id, None)
                         log.info("reaping idle playwright context for %s", chat_id)
                         try:
