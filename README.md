@@ -25,7 +25,7 @@ The PMS (`iqube.therig.in`) sits behind a Microsoft OAuth login, usually with MF
 | `/logout` | Delete the session and the local browser profile |
 | `/whoami` | Show the signed-in email and session status |
 | `/log` | Submit a Daily Log |
-| `/recent` | Show recently submitted logs |
+| `/cancel` | Cancel the `/log` conversation |
 
 ## Stack
 
