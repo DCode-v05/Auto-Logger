@@ -1,59 +1,146 @@
-# Auto-Logger
+# Auto Logger
 
-A Telegram bot that files your daily log on the iQube PMS for you. You sign in once through a Telegram Web App, then send `/log` and answer a few prompts.
+**A Telegram bot that submits your daily logs to the iQube PMS for you. Sign in once, then post from chat in a few seconds.**
 
-The PMS (`iqube.therig.in`) sits behind a Microsoft OAuth login, usually with MFA, and the log itself is a multi-field form. I built this to stop losing a few minutes to that every day. The bot drives a headless Chromium per user with Playwright, replays the same login the website uses, keeps the session, and POSTs the real Daily Log form. It does not touch the PMS server in any other way.
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white) ![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-21.6-26A5E4?style=flat&logo=telegram&logoColor=white) ![Playwright](https://img.shields.io/badge/Playwright-1.58-2EAD33?style=flat&logo=playwright&logoColor=white) ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white) ![Pydantic](https://img.shields.io/badge/Pydantic-v2-E92063?style=flat&logo=pydantic&logoColor=white) ![SQLite](https://img.shields.io/badge/SQLite-003B57?style=flat&logo=sqlite&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white) ![Tailscale](https://img.shields.io/badge/Tailscale-Funnel-242424?style=flat&logo=tailscale&logoColor=white)
 
-## How it works
+## Overview
 
-`bot/main.py` runs three things in one asyncio process and shuts them down together: the python-telegram-bot application (long polling), a FastAPI/Uvicorn server that serves the login and MFA pages, and a pool of Playwright browser contexts. `LoginCoordinator` (`bot/web/coordinator.py`) links them: the Web App posts credentials to FastAPI, the login runs as a background task in Playwright, and progress goes back to the user through the Bot API.
+The iQube PMS (`iqube.therig.in`) asks students and employees to file a daily log. Getting there takes a Microsoft OAuth sign-in, usually with MFA, and then a multi-field web form. It's a small, repetitive task that people forget, file late, or lose a couple of minutes to every day.
 
-**Login.** `/login` sends a Web App button pointing at the FastAPI form, served over HTTPS through Tailscale Funnel. `bot/auth/login_flow.py` first checks the user's browser profile for a Django `sessionid` cookie for `iqube.therig.in` and skips OAuth if it is there. (It checks the cookie rather than a URL because `/me/` is publicly reachable.) Otherwise it opens `/login/azuread-oauth2/`, which is where the site's "Sign in with Microsoft" button points, fills in the Microsoft email and password, and waits for whichever screen comes next: a TOTP/SMS code, number matching, "Stay signed in?", a password error, a push approval, or the redirect back to iQube. When a code is needed the bot sends a second Web App button and the code goes through an `asyncio.Queue`. MFA waits are capped by `MFA_TIMEOUT_SECONDS` (180 by default). Success is only reported if a real `sessionid` cookie exists afterwards.
+Auto Logger removes that friction without touching the PMS server in any other way. It's a Telegram bot that drives a real headless Chromium browser (through Playwright) per user. It replays the same Microsoft OAuth login the website uses, keeps the resulting session alive, and POSTs the real Daily Log form. From the user's side it's: sign in once through an in-chat Web App, then send `/log` and answer a few prompts. Form validation errors from the PMS come straight back into the chat.
 
-**Submitting a log.** `/log` is a `ConversationHandler` that asks for activities, time spent, location, description, an optional reference link and an optional attachment, with checks in `bot/utils/validators.py` (whole hours 0 to 24, activities up to 255 characters, links must be full `http(s)://` URLs). `bot/pms/submit_log.py` then skips the page UI and uses Playwright's `page.request`, which shares the Chromium cookie jar. It GETs the create page, takes the `csrfmiddlewaretoken` from inside `#DailyLogForm` (the navbar search is a separate form), and POSTs the form with `max_redirects=0`. A 302 to the list page is success. A 200 means the form came back with errors, and those are scraped and sent to the chat as they are. A redirect to the login page raises `ReLoginRequired`.
+I built this as a personal tool to automate my own college PMS submissions. It's the most engineering-heavy of my projects, and it isn't ML at all: OAuth/MFA replay, per-user browser isolation, in-memory-only password handling, encrypted storage, a containerized two-service deploy, and unit tests. I built it over a focused few days.
 
-**Sessions.** `bot/auth/playwright_pool.py` keeps one persistent context per Telegram `chat_id`, each with its own on-disk profile. Contexts idle for more than `SESSION_IDLE_CLOSE_SECONDS` (600 by default) are closed, but the profile stays. `/logout` closes the context and deletes the profile.
+## Key Features
 
-**Security.** The Microsoft password is held in memory for one login call and not stored. Emails in the SQLite session store are Fernet-encrypted. Every Web App request carries Telegram `initData`, which `bot/auth/telegram_initdata.py` checks with HMAC-SHA256 derived from the bot token, so the public endpoints cannot be used to start a login for someone else's chat.
+- **Submit a daily log from Telegram:** `/log` runs a guided conversation covering activities, time spent, location, description, an optional reference link and an optional attachment. Review the summary, confirm, done.
+- **Microsoft OAuth login replayed in a real browser:** the bot walks the `iqube.therig.in` AzureAD sign-in flow in headless Chromium, so the session it ends up with is the same as one you'd get by logging in yourself.
+- **MFA handled in-chat:** push approval, Authenticator number-matching, and 6-digit TOTP/SMS codes are detected automatically. The bot asks you for whatever Microsoft asks and feeds it back into the browser.
+- **Sign in once, stay signed in:** the Django `sessionid` cookie persists in a per-user Chromium profile on disk and survives bot restarts (about 2 weeks, the same lifetime the website gives you).
+- **Per-user browser isolation:** every Telegram `chat_id` gets its own Chromium `user-data-dir` and its own context. No cookie jar is shared between users.
+- **Password never hits disk:** your Microsoft password is held in memory only for the duration of one login call, then dropped.
+- **Encrypted at rest:** stored email addresses in the SQLite session store are Fernet-encrypted.
+- **Tamper-checked Web App requests:** the Telegram Web App `initData` is HMAC-SHA256 verified against the bot token, so the public login/MFA endpoints can't be used to start a login for someone else.
+- **Six bot commands:** `/start`, `/login`, `/logout`, `/whoami`, `/log`, `/cancel`.
+- **One-command deploy:** `docker compose up` starts the bot plus a Tailscale Funnel sidecar that gives you a public HTTPS URL with no domain to register.
 
-## Commands
+## How It Works
+
+The whole thing runs as a single asyncio process. `bot/main.py` starts three things together and ties their lifecycles to one shutdown handler:
+
+1. the **python-telegram-bot** application (long-polling the Telegram Bot API),
+2. a **FastAPI/Uvicorn** server that hosts the Web App login and MFA pages,
+3. a **Playwright pool** of per-user Chromium contexts.
+
+A `LoginCoordinator` links all three. The Web App posts credentials to FastAPI, the actual login runs as a background task driving Playwright, and progress messages go back to the user through the Bot API.
+
+### Logging in (OAuth + MFA replay)
+
+When a user sends `/login`, the bot sends a Telegram Web App button pointing at the FastAPI login form, served over HTTPS through Tailscale Funnel. The user enters their email and password once. That gets posted to the bot and is never written anywhere.
+
+`bot/auth/login_flow.py` then drives the browser:
+
+- It first checks whether the user's context already holds a Django `sessionid` cookie for `iqube.therig.in`. If so, it skips OAuth entirely. It checks the cookie, not the URL, because `/me/` is publicly reachable on this site and a URL check would lie.
+- Otherwise it goes straight to `social-auth-django`'s begin URL, `/login/azuread-oauth2/`, which is where the site's "Sign in with Microsoft" button links. That triggers the redirect to `login.microsoftonline.com` with no button-clicking on the PMS side.
+- On Microsoft's pages it fills in the email and password, then waits on whichever screen comes next: a TOTP/SMS code input, a number-matching display, a "Stay signed in?" prompt, a password-error box, a silent push-approval spinner, or a straight redirect back to iQube.
+
+MFA goes through callbacks. When Microsoft wants a 6-digit code, the coordinator sends a second Web App button, and the code the user types lands on an `asyncio.Queue` that `request_mfa_code()` awaits. Number-matching just waits for the redirect after the user taps the right number in their Authenticator. Everything is capped by `MFA_TIMEOUT_SECONDS` (default 180s).
+
+After the flow finishes, the coordinator re-checks the cookie jar and only reports success if a real `sessionid` cookie is present. This guards against a flow that looked done but never authenticated, for example an account not yet approved on the PMS.
+
+### Submitting a log
+
+`/log` is a python-telegram-bot `ConversationHandler` that walks through each field with inline keyboards and validates as it goes (`bot/utils/validators.py`): time spent must be a whole number of hours from 0 to 24, activities are capped at 255 characters, and reference links must be full `http(s)://` URLs.
+
+Submission itself (`bot/pms/submit_log.py`) skips the browser UI. It uses Playwright's `page.request` HTTP client, which shares the Chromium cookie jar, so it's authenticated as the user with no JavaScript or selector hunting:
+
+1. GET the Daily Log create page so Chromium attaches its session cookies.
+2. Parse out the `csrfmiddlewaretoken`, scoped to the `#DailyLogForm` block, because the navbar search is a separate form whose inputs would otherwise get picked up.
+3. POST the form fields as multipart, with `max_redirects=0` so the result can be read directly.
+4. Read the response the Django way: a **302 to the list page is success**, and a **200 means the form was re-rendered with errors**, which are scraped from the `errorlist` / `invalid-feedback` / `alert-danger` markup and sent back to the user as they are. A redirect to the login page raises `ReLoginRequired`.
+
+### Session and browser lifecycle
+
+`bot/auth/playwright_pool.py` keeps one `BrowserContext` per `chat_id`, launched as a persistent context against that user's on-disk profile directory. A background reaper closes contexts that have been idle past `SESSION_IDLE_CLOSE_SECONDS` (default 600s) but leaves the profile on disk, so the next use is a cheap relaunch with the session intact. `/logout` closes the context and deletes the profile directory.
+
+### Web layer and verification
+
+`bot/web/app.py` is a small FastAPI app serving the Jinja2 login and MFA templates plus a `/healthz` check. Every Web App request carries Telegram's `initData`, which `bot/auth/telegram_initdata.py` verifies with an HMAC-SHA256 key derived from the bot token. That way the public endpoints behind the Funnel can't be used to start logins for arbitrary chat IDs.
+
+### Bot commands
 
 | Command | What it does |
 |---------|--------------|
-| `/start` | Welcome and sign-in status |
+| `/start` | Welcome and current sign-in status |
 | `/login` | Open the Microsoft sign-in Web App |
-| `/logout` | Delete the session and the local browser profile |
+| `/logout` | Delete the session and wipe the local browser profile |
 | `/whoami` | Show the signed-in email and session status |
-| `/log` | Submit a Daily Log |
+| `/log` | Guided Daily Log submission |
 | `/cancel` | Cancel the `/log` conversation |
 
-## Stack
+The `/start` reply mentions `/recent`, but no handler exists for it, so it does nothing yet.
 
-Python 3.10+, python-telegram-bot, Playwright (Chromium), FastAPI, Uvicorn, Jinja2, Pydantic settings, `cryptography`, SQLite, Docker Compose, Tailscale Funnel. Tests use pytest and pytest-asyncio, linting uses ruff.
+## Tech Stack
 
-## Setup
+- **Language:** Python 3.10+
+- **Bot framework:** python-telegram-bot 21.6+ (`[webhooks]`, `ConversationHandler`)
+- **Browser automation:** Playwright 1.58 (Chromium, persistent contexts)
+- **Web / API:** FastAPI 0.115+, Uvicorn, Jinja2, python-multipart
+- **Config & validation:** Pydantic v2, pydantic-settings
+- **Security:** cryptography / Fernet (email encryption), HMAC-SHA256 (`initData` verification)
+- **Storage:** SQLite (per-chat session metadata)
+- **Networking:** Tailscale Funnel (public HTTPS, Let's Encrypt cert at the Tailscale edge)
+- **Deploy:** Docker, Docker Compose (bot + tailscale sidecar)
+- **Tooling:** pytest, pytest-asyncio, ruff
 
-You need a bot token from BotFather, a Tailscale auth key (for the public HTTPS URL), and either Docker or Python 3.10+.
+## Getting Started
+
+### Prerequisites
+
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- A Tailscale account and an auth key (for the public HTTPS Funnel URL)
+- Docker + Docker Compose (recommended), or Python 3.10+ for local dev
+- An iQube PMS account, and, to deploy this for others, approval from the iQube admins
+
+### Installation
 
 ```bash
 git clone https://github.com/DCode-v05/Auto-Logger.git
 cd Auto-Logger
+```
+
+Create your config and generate a Fernet key for at-rest email encryption:
+
+```bash
 cp .env.example .env
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Fill in `.env`: `TELEGRAM_BOT_TOKEN`, `BOT_ENCRYPTION_KEY` (the key you just generated), `BOT_PUBLIC_URL` (`https://pms-bot.<your-tailnet>.ts.net`) and `TS_AUTHKEY`. The other values in `.env.example` have defaults.
+Fill in `.env` (the other values in `.env.example` have defaults):
 
-With Docker:
+```
+TELEGRAM_BOT_TOKEN=123456:ABC-from-BotFather
+BOT_ENCRYPTION_KEY=<the-fernet-key-you-just-generated>
+BOT_PUBLIC_URL=https://pms-bot.<your-tailnet>.ts.net
+TS_AUTHKEY=tskey-auth-...
+```
+
+### Running with Docker (recommended)
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
 
-This starts `pms-bot` (the bot, FastAPI and the browser pool) and `pms-bot-tailscale`, which proxies the Funnel URL to `http://bot:8765`. Then set the Web App domain in BotFather (`/mybots`, Bot Settings, Domain) to `pms-bot.<your-tailnet>.ts.net`. `curl https://pms-bot.<your-tailnet>.ts.net/healthz` should return `{"status":"ok"}`.
+Two containers come up:
 
-Without Docker:
+- `pms-bot`: the Telegram bot, FastAPI server, and Playwright Chromium pool
+- `pms-bot-tailscale`: Tailscale with Funnel, proxying `https://pms-bot.<tailnet>.ts.net` → `http://bot:8765`
+
+Then point the bot's Web App domain at your Funnel URL: in BotFather, go to `/mybots` → *Bot Settings → Domain* and enter `pms-bot.<your-tailnet>.ts.net`.
+
+### Running locally for development
 
 ```bash
 pip install -e .
@@ -61,29 +148,75 @@ python -m playwright install chromium
 python -m bot.main
 ```
 
-Tests: `pip install -e ".[dev]"` then `pytest`.
+To run the tests, install the dev extras and run pytest:
 
-## Structure
-
-```
-bot/
-  main.py              entry point
-  config.py            settings from .env
-  auth/                login flow, Playwright pool, session store, initData check
-  handlers/            /start, /login, /logout, /whoami, /log, error handler
-  pms/                 Daily Log submission and the HTML selectors
-  utils/               keyboards, validators
-  web/                 FastAPI app, login coordinator, Jinja2 templates
-tests/                 initData, session store, validators
-Dockerfile
-docker-compose.yml     bot + tailscale
-tailscale-serve.json   Funnel config
+```bash
+pip install -e ".[dev]"
+pytest
 ```
 
-## Notes
+### Verify
 
-This is a personal tool for my own PMS submissions. Deploying it for other people needs approval from the iQube admins.
+```bash
+curl https://pms-bot.<your-tailnet>.ts.net/healthz   # -> {"status":"ok"}
+```
+
+Open the bot in Telegram, send `/start`, then `/login`.
+
+## Usage
+
+1. Send `/login` and complete the Microsoft sign-in through the Web App button. If MFA fires, the bot asks you for the code or tells you to approve the Authenticator number. Handle it and the bot finishes the login.
+2. Once signed in, send `/log` and answer the prompts: activities, time spent (hours), location, description, an optional reference link, and an optional attachment.
+3. Review the summary and confirm, and the bot POSTs the Daily Log on your behalf. If the PMS rejects the form, the exact validation message comes back to you in chat.
+4. Use `/whoami` to check your session, `/cancel` to abandon a log in progress, or `/logout` to clear the session and wipe your local browser profile.
+
+## Project Structure
+
+```
+Auto-Logger/
+├── bot/
+│   ├── main.py                  # Entry point: starts PTB + FastAPI + Playwright pool in one process
+│   ├── config.py                # Pydantic settings from .env, plus derived PMS URLs
+│   ├── auth/
+│   │   ├── login_flow.py        # Replays the iQube Microsoft OAuth login + MFA state machine
+│   │   ├── playwright_pool.py   # Per-chat_id Chromium lifecycle + idle reaper
+│   │   ├── session_store.py     # SQLite store with a Fernet-encrypted email column
+│   │   └── telegram_initdata.py # HMAC-SHA256 verification of Telegram Web App initData
+│   ├── handlers/
+│   │   ├── start.py             # /start, /login, /logout, /whoami
+│   │   ├── submit_log.py        # /log ConversationHandler (and /cancel)
+│   │   └── errors.py            # Global error handler
+│   ├── pms/
+│   │   ├── submit_log.py        # Fills + POSTs the Daily Log form via the browser's cookie jar
+│   │   └── selectors.py         # All HTML selectors, the one place HTML coupling lives
+│   ├── utils/
+│   │   ├── keyboards.py         # Inline keyboard builders
+│   │   └── validators.py        # Input validators (time 0–24, activities ≤255, URL)
+│   └── web/
+│       ├── app.py               # FastAPI endpoints for the Web App forms + /healthz
+│       ├── coordinator.py       # Bridges Web App ↔ Telegram ↔ Playwright login tasks
+│       └── templates/           # Jinja2 HTML for the login / MFA pages
+├── tests/
+│   ├── test_initdata.py         # initData HMAC verification
+│   ├── test_session_store.py    # encrypted store round-trips
+│   └── test_validators.py       # input validation
+├── Dockerfile                   # Built on mcr.microsoft.com/playwright/python (Chromium preinstalled)
+├── docker-compose.yml           # bot + tailscale sidecar
+├── tailscale-serve.json         # Tailscale Funnel config (proxies to port 8765)
+├── pyproject.toml
+├── .env.example
+├── .gitignore
+└── README.md
+```
+
+---
 
 ## Contact
 
-[Portfolio](https://www.denistan.me) · [LinkedIn](https://www.linkedin.com/in/denistanb) · [GitHub](https://github.com/DCode-v05) · denistanb05@gmail.com
+<table>
+  <tr><td><b>Portfolio:</b> <a href="https://www.denistan.me">Denistan</a></td><td><b>LinkedIn:</b> <a href="https://www.linkedin.com/in/denistanb">denistanb</a></td></tr>
+  <tr><td><b>GitHub:</b> <a href="https://github.com/DCode-v05">DCode-v05</a></td><td><b>LeetCode:</b> <a href="https://leetcode.com/u/Denistan_B">Denistan_B</a></td></tr>
+  <tr><td colspan="2" align="center"><b>Email:</b> <a href="mailto:denistanb05@gmail.com">denistanb05@gmail.com</a></td></tr>
+</table>
+
+Made with ❤️ by **Denistan B**
